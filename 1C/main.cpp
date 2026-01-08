@@ -3,12 +3,12 @@
 #include <vector>
 #include <chrono>
 #include <iomanip>
+#include <sstream>
+#include <limits>
 #include <opencv2/opencv.hpp>
 #include <opencv2/core/utils/logger.hpp>
 
-// --- CONFIGURACIÓN MAESTRA ---
-// Descomenta la siguiente línea SOLO cuando estés en la PC del laboratorio con NVIDIA
-// #define ENABLE_CUDA 
+#define ENABLE_CUDA
 
 #ifdef ENABLE_CUDA
 #include <opencv2/cudaimgproc.hpp>
@@ -19,48 +19,88 @@
 using namespace std;
 using namespace cv;
 
-// Función auxiliar para obtener FPS
 double getFPS(chrono::time_point<chrono::high_resolution_clock> start) {
     auto end = chrono::high_resolution_clock::now();
     chrono::duration<double> diff = end - start;
     return 1.0 / diff.count();
 }
 
-int main() {
+int main(int argc, char* argv[]) {
     cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_ERROR);
 
-    VideoCapture cap(0); // Cambia a "ruta/video.mp4" si prefieres
-    if (!cap.isOpened()) {
-        cerr << "Error: No se puede abrir la cámara/video." << endl;
+    if (argc < 2) {
+        cerr << "Uso: " << argv[0] << " <ruta_video> [salida.avi] [--cpu|--gpu]" << endl;
         return -1;
     }
 
-    // Configurar resolución para estresar un poco la máquina (HD)
-    cap.set(CAP_PROP_FRAME_WIDTH, 1280);
-    cap.set(CAP_PROP_FRAME_HEIGHT, 720);
+    bool save_output = false;
+    string output_path;
+    bool force_cpu = false;
+    bool force_gpu = false;
+
+    for (int i = 2; i < argc; ++i) {
+        string arg = argv[i];
+        if (arg == "--cpu") {
+            force_cpu = true;
+        } else if (arg == "--gpu") {
+            force_gpu = true;
+        } else if (!save_output) {
+            save_output = true;
+            output_path = arg;
+        } else {
+            cerr << "Argumento ignorado: " << arg << endl;
+        }
+    }
+
+    VideoCapture cap(argv[1]);
+    if (!cap.isOpened()) {
+        cerr << "Error: No se puede abrir el video: " << argv[1] << endl;
+        return -1;
+    }
+
+    double input_fps = cap.get(CAP_PROP_FPS);
+    if (input_fps <= 1.0) input_fps = 30.0;
+    cap.set(CAP_PROP_FRAME_WIDTH, 1920);
+    cap.set(CAP_PROP_FRAME_HEIGHT, 1080);
 
     Mat frame, result_frame;
-    
-    // --- INICIALIZACIÓN DE FILTROS (Se hace FUERA del bucle) ---
-#ifdef ENABLE_CUDA
-    cout << ">>> MODO: GPU (CUDA) ACTIVADO <<<" << endl;
-    
-    // 1. Crear objetos GpuMat (Memoria VRAM)
-    cuda::GpuMat d_frame, d_gray, d_blur, d_hist, d_eroded, d_edges;
-
-    // 2. Crear los filtros (Esto es costoso, se hace una sola vez)
-    // Filtro Gaussiano (Kernel 5x5)
-    Ptr<cuda::Filter> gaussFilter = cuda::createGaussianFilter(CV_8UC1, CV_8UC1, Size(5, 5), 1.5);
-    // Filtro Morfológico (Erosión)
-    Mat element = getStructuringElement(MORPH_RECT, Size(3, 3));
-    Ptr<cuda::Filter> erodeFilter = cuda::createMorphologyFilter(MORPH_ERODE, CV_8UC1, element);
-    // Detector Canny
-    Ptr<cuda::CannyEdgeDetector> cannyFilter = cuda::createCannyEdgeDetector(50, 150);
-
-#else
-    cout << ">>> MODO: CPU (SIMULACION LOCAL) <<<" << endl;
     Mat gray, blur, hist, eroded;
+    VideoWriter writer;
+    size_t frame_count = 0;
+    double accum_ms = 0.0;
+    double max_fps = 0.0;
+    double min_fps = std::numeric_limits<double>::max();
+    
+    bool use_cuda = false;
+
+#ifdef ENABLE_CUDA
+    use_cuda = !force_cpu;
+    if (force_gpu) use_cuda = true;
+#else
+    use_cuda = false;
+    if (force_gpu) {
+        cerr << "CUDA no disponible en la compilacion; se usara CPU." << endl;
+    }
 #endif
+
+#ifdef ENABLE_CUDA
+    cuda::GpuMat d_frame, d_gray, d_blur, d_hist, d_eroded, d_edges;
+    Ptr<cuda::Filter> gaussFilter;
+    Ptr<cuda::Filter> erodeFilter;
+    Ptr<cuda::CannyEdgeDetector> cannyFilter;
+#endif
+
+    if (use_cuda) {
+#ifdef ENABLE_CUDA
+        cout << ">>> MODO: GPU (CUDA) ACTIVADO <<<" << endl;
+        gaussFilter = cuda::createGaussianFilter(CV_8UC1, CV_8UC1, Size(5, 5), 1.5);
+        Mat element = getStructuringElement(MORPH_RECT, Size(3, 3));
+        erodeFilter = cuda::createMorphologyFilter(MORPH_ERODE, CV_8UC1, element);
+        cannyFilter = cuda::createCannyEdgeDetector(50, 150);
+#endif
+    } else {
+        cout << ">>> modo CPU <<<" << endl;
+    }
 
     while (true) {
         auto start_time = chrono::high_resolution_clock::now();
@@ -68,59 +108,66 @@ int main() {
         cap >> frame;
         if (frame.empty()) break;
 
+    if (use_cuda) {
 #ifdef ENABLE_CUDA
-        // ================= PIPELINE GPU-ONLY =================
-        [cite_start]// [cite: 111, 120] La guía exige no bajar a CPU entre pasos
-        
-        // 1. UPLOAD (El único paso lento de subida)
+        // pipeline en GPU
         d_frame.upload(frame);
-
-        // 2. Preprocesamiento (Todo ocurre en VRAM)
         cuda::cvtColor(d_frame, d_gray, COLOR_BGR2GRAY);
-        
-        // 3. Suavizado
         gaussFilter->apply(d_gray, d_blur);
-
-        // 4. Ecualización de Histograma
         cuda::equalizeHist(d_blur, d_hist);
-
-        // 5. Erosión
         erodeFilter->apply(d_hist, d_eroded);
-
-        // 6. Detección de Bordes (Canny)
         cannyFilter->detect(d_eroded, d_edges);
-
-        // 7. DOWNLOAD (Bajamos solo el resultado final)
         d_edges.download(result_frame);
-
-#else
-        // ================= PIPELINE CPU (TU CASA) =================
-        // Lógica espejo para verificar que los filtros funcionan
-        
+#endif
+    } else {
+        // pipeline en CPU
         cvtColor(frame, gray, COLOR_BGR2GRAY);
         GaussianBlur(gray, blur, Size(5, 5), 1.5);
         equalizeHist(blur, hist);
         erode(hist, eroded, getStructuringElement(MORPH_RECT, Size(3, 3)));
         Canny(eroded, result_frame, 50, 150);
-#endif
-
-        // --- MÉTRICAS Y VISUALIZACIÓN ---
+    }
         double fps = getFPS(start_time);
-        
-        string device_tag =
-#ifdef ENABLE_CUDA 
-        "GPU (CUDA)"; 
-#else 
-        "CPU (i9-13900H)"; 
-#endif
-        
-        // Dibujar datos en pantalla (Requisito visual)
+        double elapsed_ms = 1000.0 / fps;
+
+        frame_count++;
+        accum_ms += elapsed_ms;
+        max_fps = std::max(max_fps, fps);
+        min_fps = std::min(min_fps, fps);
+
+        std::ostringstream ms_label;
+        ms_label << std::fixed << std::setprecision(2) << elapsed_ms;
+
+        string device_tag = use_cuda ? "GPU (CUDA)" : "CPU";
         putText(result_frame, "Dispositivo: " + device_tag, Point(10, 30), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255), 2);
         putText(result_frame, "FPS: " + to_string((int)fps), Point(10, 60), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255), 2);
+        putText(result_frame, "Tiempo: " + ms_label.str() + " ms", Point(10, 90), FONT_HERSHEY_SIMPLEX, 0.7, Scalar(255), 2);
+
+        if (save_output) {
+            if (!writer.isOpened()) {
+                int fourcc = VideoWriter::fourcc('M', 'J', 'P', 'G');
+                bool ok = writer.open(output_path, fourcc, input_fps, result_frame.size(), false);
+                if (!ok) {
+                    cerr << "No se pudo abrir el archivo de salida: " << output_path << endl;
+                }
+            }
+            if (writer.isOpened()) {
+                writer.write(result_frame);
+            }
+        }
 
         imshow("Laboratorio Vision - Pipeline", result_frame);
 
         if (waitKey(1) == 27) break; // ESC para salir
+    }
+
+    if (frame_count > 0) {
+        double avg_ms = accum_ms / static_cast<double>(frame_count);
+        double avg_fps = 1000.0 / avg_ms;
+        cout << "Resumen de ejecucion" << endl;
+        cout << "  Frames procesados: " << frame_count << endl;
+        cout << "  Promedio: " << fixed << setprecision(2) << avg_ms << " ms/frame (" << setprecision(1) << avg_fps << " fps)" << endl;
+        cout << "  Mejor fps: " << fixed << setprecision(1) << max_fps << " | Peor fps: " << min_fps << endl;
     }
 
     return 0;

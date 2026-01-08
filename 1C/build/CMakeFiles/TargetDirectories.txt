@@ -1,0 +1,3 @@
+/home/cisco/Downloads/codigo/Practica-Clasificacion-de-Objetos/1C/build/CMakeFiles/vision_app.dir
+/home/cisco/Downloads/codigo/Practica-Clasificacion-de-Objetos/1C/build/CMakeFiles/edit_cache.dir
+/home/cisco/Downloads/codigo/Practica-Clasificacion-de-Objetos/1C/build/CMakeFiles/rebuild_cache.dir
