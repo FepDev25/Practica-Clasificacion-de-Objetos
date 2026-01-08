@@ -1,0 +1,37 @@
+# PARTE 1B - YOLO + Super Resolution
+# Instalación: pip install -r requirements.txt
+
+# === CORE ===
+torch>=2.0.0
+torchvision>=0.15.0
+opencv-python>=4.8.0
+opencv-contrib-python>=4.8.0
+numpy>=1.24.0
+pillow>=10.0.0
+
+# === YOLO (YOLOv11/YOLOv8) ===
+ultralytics>=8.0.0
+
+# === Super Resolution (Opciones) ===
+# Opción 1: Real-ESRGAN (Actualizado 2024)
+realesrgan>=0.3.0
+
+# Opción 2: BasicSR (Framework para SR, incluye SwinIR, HAT, etc.)
+basicsr>=1.4.2
+
+# === Métricas y Sistema ===
+psutil>=5.9.0  # Monitor de RAM, CPU
+GPUtil>=1.4.0  # Monitor de GPU (alternativa a nvidia-smi parsing)
+
+# === Extras ===
+tqdm>=4.65.0   # Barra de progreso
+pyyaml>=6.0    # Configuración
+
+# === OPCIONAL: Para modelos más avanzados ===
+# timm>=0.9.0  # Modelos de visión (si usas HAT o SwinIR)
+# einops>=0.7.0  # Operaciones tensoriales
+
+# NOTAS:
+# - En el laboratorio, verificar que CUDA esté disponible con: python -c "import torch; print(torch.cuda.is_available())"
+# - Para Real-ESRGAN, también puedes clonar el repo si pip falla: https://github.com/xinntao/Real-ESRGAN
+# - Si opencv-contrib da problemas, usar solo opencv-python
