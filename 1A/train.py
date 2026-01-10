@@ -1,9 +1,6 @@
 from ultralytics import YOLO
 
-# 1. Cargar un modelo base de SEGMENTACIÓN 
-model = YOLO('yolo11n-seg.pt')  #usamos la version nano que es mas ligera
-
-# 2. Entrenar el modelo
+model = YOLO('yolo11n-seg.pt')
 
 if __name__ == '__main__':
     print("Iniciando entrenamiento... ")
